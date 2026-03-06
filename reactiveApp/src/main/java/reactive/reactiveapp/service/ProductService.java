@@ -3,6 +3,8 @@ package reactive.reactiveapp.service;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import reactive.reactiveapp.entity.Product;
+import reactive.reactiveapp.entity.ProductEvent;
+import reactive.reactiveapp.entity.ProductEventType;
 import reactive.reactiveapp.repository.ProductRepository;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -17,38 +19,46 @@ public class ProductService {
 
     private final ProductRepository repository;
 
-    // 🔥 Stream temps réel (multicast = plusieurs clients)
-    private final Sinks.Many<Product> sink =
+    private final Sinks.Many<ProductEvent> sink =
             Sinks.many().multicast().onBackpressureBuffer();
 
-    public Flux<Product> liveStream() {
+    public Flux<ProductEvent> liveStream() {
+
         return sink.asFlux()
-                .mergeWith(Flux.interval(Duration.ofSeconds(1))
-                        .map(i -> new Product())); // dummy heartbeat
+                .mergeWith(Flux.interval(Duration.ofSeconds(10))
+                .map(i-> new ProductEvent(
+                        ProductEventType.HEARTBEAT,
+                        null,
+                        Instant.now())));
     }
 
-    // ✅ CREATE
+
     public Mono<Product> createProduct(Product product) {
         product.setCreatedAt(Instant.now());
         product.setUpdatedAt(Instant.now());
 
         return repository.save(product)
-                .doOnNext(saved -> sink.tryEmitNext(saved)); // 🔥 push event
+                .doOnNext(saved ->
+                        sink.tryEmitNext(new ProductEvent(
+                            ProductEventType.CREATED,saved,Instant.now()
+                )))
+                .doOnNext(saved ->System.out.println("🔥 Product saved: " + saved));
+
     }
 
-    // 📥 GET ALL
     public Flux<Product> getAllProducts() {
         return repository.findAll();
     }
 
-    // 🔍 GET BY ID
+
     public Mono<Product> getProductById(String id) {
         return repository.findById(id);
     }
 
-    // ✏️ UPDATE
+
     public Mono<Product> updateProduct(String id, Product product) {
         return repository.findById(id)
+                .switchIfEmpty(Mono.error(new RuntimeException("Product not found: " + id)))
                 .flatMap(existing -> {
                     existing.setName(product.getName());
                     existing.setDescription(product.getDescription());
@@ -56,20 +66,22 @@ public class ProductService {
                     existing.setCategory(product.getCategory());
                     existing.setQuantity(product.getQuantity());
                     existing.setUpdatedAt(Instant.now());
-
                     return repository.save(existing);
                 })
-                .doOnNext(updated -> sink.tryEmitNext(updated)); // 🔥 push update
+                .doOnNext(updated -> sink.tryEmitNext(
+                        new ProductEvent(ProductEventType.UPDATED, updated, Instant.now())
+                ));
     }
 
-    // ❌ DELETE
     public Mono<Product> deleteProduct(String id) {
         return repository.findById(id)
+                .switchIfEmpty(Mono.error(new RuntimeException("Product not found: " + id)))
                 .flatMap(product ->
-                        repository.deleteById(id)
-                                .thenReturn(product) // Return the deleted product
-                                .doOnSuccess(deletedProduct -> 
-                                        sink.tryEmitNext(deletedProduct)) // 🔥 notify delete
-                );
+                        repository.delete(product)
+                                .thenReturn(product)
+                )
+                .doOnNext(deleted -> sink.tryEmitNext(
+                        new ProductEvent(ProductEventType.DELETED,deleted, Instant.now())
+                ));
     }
 }
