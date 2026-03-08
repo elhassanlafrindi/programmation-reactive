@@ -80,3 +80,4 @@ The frontend will start on `http://localhost:5173`
 
 - Make sure Elasticsearch is running on `http://localhost:9200`
 - Ensure the backend is running on `http://localhost:8080` before starting the frontend
+- Check that CORS is properly configured if running on different ports
